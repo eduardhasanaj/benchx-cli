@@ -173,6 +173,9 @@ func (c *BenchCommand) parse(r io.Reader) (*BenchResults, error) {
 		fmt.Sscan(t, &desc, &itCount, &nsopAmount, &nsopLabel, &bopAmount, &bopLabel,
 			&allocs, &allocsLabel)
 
+		if notStatRow(desc) {
+			continue
+		}
 		group, name, err := c.parseGrAndName(desc)
 
 		if err != nil {
@@ -228,6 +231,10 @@ func (c *BenchCommand) parseGrAndName(desc string) (string, string, error) {
 			fmt.Sscanf(desc, "Benchmark"+gr+"%s-", &name)
 			name = strings.ToLower(name)
 
+			dashIndex := strings.Index(name, "-")
+			if dashIndex != -1 {
+				name = name[0:dashIndex]
+			}
 			return gr, name, nil
 		}
 	}
@@ -254,4 +261,8 @@ func ensureGraphsDir(dir string) error {
 
 func resolveChartWidth(barCount, barWidth int) int {
 	return barCount * (150 + barWidth)
+}
+
+func notStatRow(desc string) bool {
+	return desc == "goos:" || desc == "goarch:" || desc == "pkg:" || desc == "cpu:"
 }
