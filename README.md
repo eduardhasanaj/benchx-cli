@@ -1,7 +1,6 @@
 # BENCHX CLI [![Go Report Card](https://goreportcard.com/badge/github.com/eduardhasanaj/benchx-cli)](https://goreportcard.com/report/github.com/eduardhasanaj/benchx-cli)
 
-Benchx is a command line tool which provides a handy experience for generating benchmark graphs by examining the output of:
-
+Benchx is a command line tool which provides a handy experience for generating benchmark graphs by examining the output of
 `
 go test ./... -bench . -benchmem
 `
