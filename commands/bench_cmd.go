@@ -33,7 +33,7 @@ type BenchCommand struct {
 }
 
 func (c *BenchCommand) Run(ctx *Context) error {
-	c.dir = "./graphs"
+	c.dir = "./benchx-graphs"
 	if err := ensureGraphsDir(c.dir); err != nil {
 		return err
 	}
