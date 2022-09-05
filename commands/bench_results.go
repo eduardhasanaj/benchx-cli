@@ -1,4 +1,4 @@
-package cmd
+package commands
 
 import "github.com/wcharczuk/go-chart/v2"
 

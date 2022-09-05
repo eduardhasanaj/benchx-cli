@@ -1,4 +1,4 @@
-package cmd
+package commands
 
 import (
 	"bufio"
@@ -8,12 +8,14 @@ import (
 	"io"
 	"os"
 	"strings"
-	"unicode"
 
 	exec "golang.org/x/sys/execabs"
 
 	"github.com/wcharczuk/go-chart/v2"
-	"github.com/wcharczuk/go-chart/v2/drawing"
+)
+
+const (
+	DefaultGr = "default_group"
 )
 
 var statType = map[string]bool{
@@ -24,16 +26,23 @@ var statType = map[string]bool{
 }
 
 type BenchCommand struct {
-	Groups []string `arg:"" name:"groups" help:"Benchmark groups"`
+	Groups []string `name:"groups" help:"Benchmark groups"`
+
+	groupDef bool
+	dir      string
 }
 
 func (c *BenchCommand) Run(ctx *Context) error {
-	dir := "./graphs"
-	if err := ensureGraphsDir(dir); err != nil {
+	c.dir = "./graphs"
+	if err := ensureGraphsDir(c.dir); err != nil {
 		return err
 	}
 
-	cmd := exec.Command("go", "test", "-bench", ".", "-benchmem")
+	if len(c.Groups) > 0 {
+		c.groupDef = true
+	}
+
+	cmd := exec.Command("go", "test", "./...", "-bench", ".", "-benchmem")
 	out, err := cmd.Output()
 	if err != nil {
 		return errors.New(string(out))
@@ -46,43 +55,40 @@ func (c *BenchCommand) Run(ctx *Context) error {
 		return err
 	}
 
-	if err = renderStats("Iterations", "", res.it, true); err != nil {
+	if err = c.renderStats("Iterations", res.it, true); err != nil {
 		return err
 	}
 
-	if err = renderStats("Memory Per Operation", "b/op", res.memory, true); err != nil {
+	if err = c.renderStats("b/op", res.memory, true); err != nil {
 		return err
 	}
 
-	if err = renderStats("Memory Allocations", "allocs/op", res.alloc, true); err != nil {
+	if err = c.renderStats("allocs/op", res.alloc, true); err != nil {
 		return err
 	}
 
-	if err = writeOutput(dir, out); err != nil {
+	if err = c.renderStats("ns/op", res.speed, false); err != nil {
 		return err
 	}
 
-	if err = renderStats("Speed", "ns/op", res.speed, false); err != nil {
+	if err = writeOutput(c.dir, out); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func writeOutput(dir string, b []byte) error {
-	f, err := os.Create(dir + "/output.txt")
-	if err != nil {
-		return err
-	}
-
-	_, err = f.Write(b)
-
-	return err
-}
-
-func renderStats(title, yLabel string, data map[string][]chart.Value, isInteger bool) error {
+func (c *BenchCommand) renderStats(statType string, data map[string][]chart.Value, isInteger bool) error {
 	for k, v := range data {
-		if err := makeGraph(k+" "+title, yLabel, v, isInteger); err != nil {
+		var title string
+
+		if c.groupDef {
+			title = fmt.Sprintf("%s %s", k, statType)
+		} else {
+			title = statType
+		}
+
+		if err := c.makeGraph(title, v, isInteger); err != nil {
 			return err
 		}
 	}
@@ -90,9 +96,9 @@ func renderStats(title, yLabel string, data map[string][]chart.Value, isInteger 
 	return nil
 }
 
-func makeGraph(title, vertTitle string, values []chart.Value, isInteger bool) error {
+func (c *BenchCommand) makeGraph(title string, values []chart.Value, isInteger bool) error {
 	graph := chart.BarChart{
-		Title: addSpacesBeforeUpper(title),
+		Title: title,
 		TitleStyle: chart.Style{
 			FontSize: 20,
 		},
@@ -101,35 +107,21 @@ func makeGraph(title, vertTitle string, values []chart.Value, isInteger bool) er
 				Top: 60,
 			},
 		},
-		Width:    -1,
+		Width:    resolveChartWidth(len(values), 60),
 		Height:   512,
 		BarWidth: 60,
 		Bars:     values,
-	}
-
-	if len(vertTitle) > 0 {
-		graph.YAxis = chart.YAxis{
-			Name: vertTitle,
-			NameStyle: chart.Style{
-				FontSize: 14,
-				Padding: chart.Box{
-					Left:  20,
-					Right: 40,
-				},
-			},
-			Style: chart.Style{
-				Hidden:      false,
-				StrokeColor: drawing.ColorBlack,
-				FontColor:   drawing.ColorBlack,
-			},
-		}
 	}
 
 	if isInteger {
 		graph.YAxis.ValueFormatter = chart.IntValueFormatter
 	}
 
-	f, err := os.Create("./graphs/" + title + ".png")
+	fileName := strings.ReplaceAll(title, " ", "_")
+	fileName = strings.ReplaceAll(fileName, "/", "_")
+	path := fmt.Sprintf("%s/%s.png", c.dir, strings.ToLower(fileName))
+
+	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
@@ -180,28 +172,29 @@ func (c *BenchCommand) parse(r io.Reader) (*BenchResults, error) {
 
 		fmt.Sscan(t, &desc, &itCount, &nsopAmount, &nsopLabel, &bopAmount, &bopLabel,
 			&allocs, &allocsLabel)
-		gr, name, err := parseGrAndName(desc, c.Groups)
+
+		group, name, err := c.parseGrAndName(desc)
+
 		if err != nil {
-			continue
-			// return nil, err
+			return nil, err
 		}
 
-		br.addItStat(gr, chart.Value{
+		br.addItStat(group, chart.Value{
 			Value: itCount,
 			Label: name,
 		})
 
-		br.addSpeedStat(gr, chart.Value{
+		br.addSpeedStat(group, chart.Value{
 			Value: nsopAmount,
 			Label: name,
 		})
 
-		br.addMemStat(gr, chart.Value{
+		br.addMemStat(group, chart.Value{
 			Value: bopAmount,
 			Label: name,
 		})
 
-		br.addAllocStat(gr, chart.Value{
+		br.addAllocStat(group, chart.Value{
 			Value: allocs,
 			Label: name,
 		})
@@ -210,21 +203,30 @@ func (c *BenchCommand) parse(r io.Reader) (*BenchResults, error) {
 	return br, nil
 }
 
-func parseGrAndName(desc string, groups []string) (string, string, error) {
-	for _, gr := range groups {
+func writeOutput(dir string, b []byte) error {
+	f, err := os.Create(dir + "/output.txt")
+	if err != nil {
+		return err
+	}
+
+	_, err = f.Write(b)
+
+	return err
+}
+
+func (c *BenchCommand) parseGrAndName(desc string) (string, string, error) {
+	var name string
+	if !c.groupDef {
+		fmt.Sscanf(desc, "Benchmark%s-", &name)
+		name = strings.ToLower(name)
+		return DefaultGr, name, nil
+	}
+
+	for _, gr := range c.Groups {
 		if strings.Contains(desc, gr) {
-			desc = strings.Replace(desc, "Benchmark", "", 1)
-			desc = strings.Replace(desc, gr, "", 1)
-			slashIndex := strings.Index(desc, "/")
-			if slashIndex == -1 {
-				slashIndex = strings.Index(desc, "-")
-			}
-
-			if slashIndex != -1 {
-				desc = desc[0:slashIndex]
-			}
-
-			name := strings.ToLower(desc)
+			var name string
+			fmt.Sscanf(desc, "Benchmark"+gr+"%s-", &name)
+			name = strings.ToLower(name)
 
 			return gr, name, nil
 		}
@@ -242,28 +244,14 @@ func parseKV(kvStr string, delimiter string) (string, string) {
 	return arr[0], arr[1]
 }
 
-func addSpacesBeforeUpper(str string) string {
-	sb := strings.Builder{}
-
-	lastLower := true
-	for _, v := range str {
-		isUpper := unicode.IsUpper(v)
-		if isUpper && lastLower {
-			sb.WriteString(" ")
-		}
-
-		sb.WriteRune(v)
-
-		lastLower = !isUpper
-	}
-
-	return sb.String()
-}
-
 func ensureGraphsDir(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return os.Mkdir(dir, 0755)
 	}
 
 	return nil
+}
+
+func resolveChartWidth(barCount, barWidth int) int {
+	return barCount * (150 + barWidth)
 }
